@@ -1,0 +1,77 @@
+#!/usr/bin/python
+
+import subprocess
+from multiprocessing import Process, Value
+import os, sys
+import Queue
+
+def getProjectList():
+    queue = Queue.Queue()
+    while True:
+        loc = os.getcwd()
+        if loc == '/':
+            print 'error: repo is not installed.  Use "repo init" to install it here.'
+            sys.exit(-1)
+        else:
+            if os.path.isdir('.repo'):
+                os.chdir(loc)
+                List = open('.repo/project.list','r')
+                while True:
+                    context = List.readline()
+                    if not context:
+                        break
+                    queue.put(context.strip())
+                queue.put('STOP')
+                break
+            else:
+                os.chdir('..')
+    return queue
+
+def runCmd(cmds):
+    os.system(cmds)
+    #for cmd in cmds.split(';'):
+        #print cmd.split()
+        #pcmd = subprocess.Popen(cmd.split())
+        #pcmd.communicate()
+
+def runCmdThread(jobs, cmds):
+    jobs.value += 1
+    runCmd(cmds)
+    jobs.value -= 1
+
+def runCommand(args):
+    queue = getProjectList()
+    root = os.getcwd()
+    jobs=0
+    tot_jobs = Value('i',0)
+    try:
+        if isinstance(int(args[0]), int):
+            jobs = args[0]
+    except ValueError:
+        print "first argument must be INTEGER"
+        sys.exit(-1)
+    cmd = ''
+    for i in range(1,len(args)):
+        cmd += args[i] + ' '
+    #print "jobs = %s" %(jobs)
+    while True:
+        cur_job = tot_jobs.value
+        if int(cur_job) <= int(jobs):
+            project = queue.get()
+            if project == 'STOP':
+                break
+            else:
+                #print "cur_job is = %d" %cur_job
+                os.chdir(root)
+                os.chdir(queue.get())
+                process = Process(target=runCmdThread, args=(tot_jobs, cmd,))
+                process.start()
+
+def main(args):
+    runCommand(args)
+#        else:
+            
+        
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
