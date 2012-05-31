@@ -63,7 +63,7 @@ def runCommand(args):
             else:
                 #print "cur_job is = %d" %cur_job
                 os.chdir(root)
-                os.chdir(queue.get())
+                os.chdir(project)
                 process = Process(target=runCmdThread, args=(tot_jobs, cmd,))
                 process.start()
 
