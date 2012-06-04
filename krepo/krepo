@@ -30,10 +30,6 @@ def getProjectList():
 
 def runCmd(cmds):
     os.system(cmds)
-    #for cmd in cmds.split(';'):
-        #print cmd.split()
-        #pcmd = subprocess.Popen(cmd.split())
-        #pcmd.communicate()
 
 def runCmdThread(jobs, cmds):
     jobs.value += 1
@@ -54,7 +50,6 @@ def runCommand(args):
     cmd = ''
     for i in range(1,len(args)):
         cmd += args[i] + ' '
-    #print "jobs = %s" %(jobs)
     while True:
         cur_job = tot_jobs.value
         if int(cur_job) <= int(jobs):
@@ -62,18 +57,17 @@ def runCommand(args):
             if project == 'STOP':
                 break
             else:
-                #print "cur_job is = %d" %cur_job
                 os.chdir(root)
                 os.chdir(project)
                 process = Process(target=runCmdThread, args=(tot_jobs, cmd,))
                 process.start()
 
 def main(args):
-	try:
-	    runCommand(args)
-	except (KeyboardInterrupt, SystemExit):
-		print '\n Received keyboard interrupt, quitting threads. \n'
-		sys.exit(0)
+    try:
+        runCommand(args)
+    except (KeyboardInterrupt, SystemExit):
+        print '\n Received keyboard interrupt, quitting threads. \n'
+        sys.exit(0)
             
         
 
