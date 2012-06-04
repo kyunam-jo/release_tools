@@ -4,6 +4,7 @@ import subprocess
 from multiprocessing import Process, Value
 import os, sys
 import Queue
+import shlex
 
 def getProjectList():
     queue = Queue.Queue()
@@ -68,8 +69,11 @@ def runCommand(args):
                 process.start()
 
 def main(args):
-    runCommand(args)
-#        else:
+	try:
+	    runCommand(args)
+	except (KeyboardInterrupt, SystemExit):
+		print '\n Received keyboard interrupt, quitting threads. \n'
+		sys.exit(0)
             
         
 
