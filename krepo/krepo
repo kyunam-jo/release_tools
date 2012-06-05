@@ -22,7 +22,7 @@ def getProjectList():
                     if not context:
                         break
                     queue.put(context.strip())
-                queue.put('STOP')
+#                queue.put('STOP')
                 break
             else:
                 os.chdir('..')
@@ -54,7 +54,8 @@ def runCommand(args):
         cur_job = tot_jobs.value
         if int(cur_job) <= int(jobs):
             project = queue.get()
-            if project == 'STOP':
+#            if project == 'STOP':
+            if queue.empty():
                 break
             else:
                 os.chdir(root)
@@ -65,7 +66,7 @@ def runCommand(args):
 def main(args):
     try:
         runCommand(args)
-    except (KeyboardInterrupt, SystemExit):
+    except (KeyboardInterrupt):
         print '\n Received keyboard interrupt, quitting threads. \n'
         sys.exit(0)
             
