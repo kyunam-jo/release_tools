@@ -6,8 +6,7 @@ import os, sys
 import Queue
 
 
-def getProjectList():
-    queue = Queue.Queue()
+def changeRootDir():
     while True:
         loc = os.getcwd()
         if loc == '/':
@@ -15,17 +14,18 @@ def getProjectList():
             sys.exit(-1)
         else:
             if os.path.isdir('.repo'):
-                os.chdir(loc)
-                List = open('.repo/project.list','r')
-                while True:
-                    context = List.readline()
-                    if not context:
-                        break
-                    queue.put(context.strip())
-#                queue.put('STOP')
-                break
+				return loc
             else:
                 os.chdir('..')
+
+def getProjectList():
+    queue = Queue.Queue()
+    List = open('.repo/project.list','r')
+    while True:
+        context = List.readline()
+        if not context:
+            break
+        queue.put(context.strip())
     return queue
 
 def getProjectListRepo():
@@ -63,7 +63,7 @@ def setenv(name, val):
 
 def runCommand(args):
     repoList = getProjectListRepo()
-    root = os.getcwd()
+    root = changeRootDir()
     jobs=0
     tot_jobs = Value('i',0)
     try:
