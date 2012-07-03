@@ -29,7 +29,7 @@ def getProjectList():
     return queue
 
 def getProjectListRepo():
-    ret = runCmdReturn('repo list')
+    ret = runCmd('repo list', returnType=True)
     repoList = Queue.Queue()
     if not ret:
         sys.exit(-1)
@@ -39,21 +39,31 @@ def getProjectListRepo():
     return repoList
 
 
-def runCmdReturn(cmd):
-    pcmd = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, executable='/bin/bash')
-    return pcmd.communicate()
+def runCmd(cmd, shell=True, returnType=False ,loc=None):
+    if returnType:
+        stdin = subprocess.PIPE
+        stdout = subprocess.PIPE
+        stderr = subprocess.PIPE
+    else:
+        stdin=None
+        stdout=None
+        stderr=None
+    p = subprocess.Popen(cmd,
+                         cwd=loc,
+                         shell=shell,
+                         stdin=stdin,
+                         stdout=stdout,
+                         stderr=stderr,
+                         executable='/bin/bash')
+    return p.communicate()
 
 
-def runCmd(cmd):
-    p = subprocess.Popen(cmd, shell=True, executable='/bin/bash')
-    p.communicate()
-
-
-def runCmdThread(jobs, cmds, project):
-    jobs.value += 1
+def runCmdThread(jobs, cmd, project):
+#    print jobs.value
+#    jobs.value += 1
     setenv('REPO_PROJECT',project[1])
     setenv('REPO_PATH',project[0])
-    runCmd(cmds)
+    runCmd(cmd, loc=project[0])
     jobs.value -= 1
 
 
@@ -64,11 +74,15 @@ def setenv(name, val):
 def runCommand(args):
     repoList = getProjectListRepo()
     root = changeRootDir()
-    jobs=0
-    tot_jobs = Value('i',0)
+    tot_jobs=0
+    cur_jobs = Value('i',0)
+    job_list =[]
     try:
-        if isinstance(int(args[0]), int):
-            jobs = args[0]
+        if isinstance(int(args[0]), int) and int(args[0]) >= 1:
+            tot_jobs = int(args[0])
+        else:
+            print "fatal : first argument is greater than 1"
+            sys.exit(-1)
     except ValueError:
         print "fatal : first argument must be INTEGER"
         sys.exit(-1)
@@ -76,17 +90,16 @@ def runCommand(args):
     for i in range(1,len(args)):
         cmd += args[i] + ' '
     while True:
-        cur_job = tot_jobs.value
-        if int(cur_job) <= int(jobs):
+        if  cur_jobs.value <= tot_jobs and cur_jobs.value >= 0:
             project = repoList.get()
             if repoList.empty():
                 break
             else:
-                os.chdir(root)
-                os.chdir(project[0])
-                process = Process(target=runCmdThread, args=(tot_jobs, cmd, project,))
+                cur_jobs.value += 1
+                process = Process(target=runCmdThread, args=(cur_jobs, cmd, project,))
                 process.start()
-
+        else:
+            continue
 
 def main(args):
     try:
