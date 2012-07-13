@@ -14,7 +14,7 @@ def changeRootDir():
             sys.exit(-1)
         else:
             if os.path.isdir('.repo'):
-				return loc
+                return loc
             else:
                 os.chdir('..')
 
