@@ -63,7 +63,8 @@ def runCmdThread(jobs, cmd, project):
 #    jobs.value += 1
     setenv('REPO_PROJECT',project[1])
     setenv('REPO_PATH',project[0])
-    runCmd(cmd, loc=project[0])
+    if os.path.isdir(project[0]):
+        runCmd(cmd, loc=project[0])
     jobs.value -= 1
 
 
@@ -92,6 +93,7 @@ def runCommand(args):
     while True:
         if  cur_jobs.value <= tot_jobs and cur_jobs.value >= 0:
             project = repoList.get()
+#           print project
             if repoList.empty():
                 break
             else:
