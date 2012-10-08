@@ -1,5 +1,5 @@
 #!/usr/bin/python
-
+import optparse
 import subprocess
 from multiprocessing import Process, Value
 import os, sys
@@ -78,6 +78,8 @@ def runCommand(args):
     tot_jobs=0
     cur_jobs = Value('i',0)
     job_list =[]
+    if args[0] == '-h':
+        usage()
     try:
         if isinstance(int(args[0]), int) and int(args[0]) >= 1:
             tot_jobs = int(args[0])
@@ -104,12 +106,21 @@ def runCommand(args):
             continue
 
 def main(args):
+    if not args or args[0] == '-h' or args[0] == "--help":
+        usage()
     try:
         runCommand(args)
     except (KeyboardInterrupt):
         print '\nReceived keyboard interrupt, quitting threads. \n'
         sys.exit(0)
         
+def usage():
+   print >>sys.stderr, \
+""" Usage : krepo [Thread Num] COMMAND
+
+ex) krepo 10 git push lap HEAD:capp_ics
+
+"""
 
 if __name__ == "__main__":
     main(sys.argv[1:])
