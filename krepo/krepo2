@@ -1,0 +1,188 @@
+#! /usr/bin/env python
+import optparse
+import subprocess
+import os, sys
+
+option_0 = {'name': ('-p', '--port'), 'help' : 'Input master server port number', 'nargs' : 1}
+option_1 = {'name': ('-u', '--url'), 'help' : 'Input master server url', 'nargs' : 1}
+option_2 = {'name': ('-b', '--branch'), 'help' : 'Input branch for conparation', 'nargs' : 1}
+
+options = [option_0, option_1, option_2]
+
+def changeRootDir():
+    while True:
+        loc = os.getcwd()
+        if loc == '/':
+            print 'error: repo is not installed.  Use "repo init" to install it here.'
+            sys.exit(-1)
+        else:
+            if os.path.isdir('.repo'):
+                return loc
+            else:
+                os.chdir('..')
+
+
+def runCmd(cmd, shell=True, returnType=False ,loc=None):
+    if returnType:
+        stdin = subprocess.PIPE
+        stdout = subprocess.PIPE
+        stderr = subprocess.PIPE
+    else:
+        stdin=None
+        stdout=None
+        stderr=None
+    p = subprocess.Popen(cmd,
+                         cwd=loc,
+                         shell=shell,
+                         stdin=stdin,
+                         stdout=stdout,
+                         stderr=stderr,
+                         executable='/bin/bash')
+    return p.communicate()
+
+
+def getRecentSha1InBranch(srcInfo, branch):
+    masterInfo={}
+    result=runCmd('ssh -p %s %s gerrit ls-projects -b %s' %(srcInfo['port'],srcInfo['url'],branch),
+        returnType=True)[0].strip().split('\n')
+
+    for data in result:
+        masterInfo[data.split(' ')[1]]= data.split(' ')[0].strip()
+
+    return masterInfo
+
+
+def getStatusManifest(branch):
+    diffProject = []
+    changeRootDir()
+    if os.path.isdir(".repo/manifests"):
+        os.chdir(".repo/manifests")
+    else:
+        print >> sys.stderr, "fatal : No such file or directory"
+        sys.exit(-1)
+
+    if os.path.exists("default.xml"):
+        returnValue=runCmd("git status", returnType=True)[0].strip().split('\n')
+        if len(returnValue) > 2 :
+            diffProject = runCmd('git diff | grep "[+|-][ ]*<" | sed "s/^.*name=\"//g" | sed "s/\".*\/>//g"',returnType=True)[0].strip().split('\n')
+            if len(diffProject) == 0:
+                diffProject = runCmd('git diff HEAD | grep "[+|-][ ]*<" | sed "s/^.*name=\"//g" | sed "s/\".*\/>//g"',returnType=True)[0].strip().split('\n')
+        else:
+            runCmd('git fetch origin %s' %branch)
+            runCmd('git reset --hard FETCH_HEAD')
+
+    return diffProject
+
+
+
+def getStatusLocal():
+    localInfo={"notExist" : [], "Exist" : {}}
+
+    returnValue=runCmd('repo list -f', returnType=True)[0].strip().split('\n')
+
+    numOfLocalProject = len(returnValue)
+
+    for num in range(returnValue.count('')):
+        returnValue.remove('')
+
+    if returnValue:
+        for project in returnValue:
+            if not os.path.isdir(project.split(':')[0].strip() + '/.git'):
+                localInfo["notExist"].append(project.split(':')[1].strip())
+            else:
+                data=runCmd("echo $(git --git-dir=" + project.split(':')[0].strip() + "/.git log -1 --pretty=format:%H) " + project.split(':')[1].strip(),returnType=True)[0].strip()
+#                data=runCmd("repo forall " + project.split(':')[1].strip() + " -c 'echo $(git log -1 --pretty=format:%H) $REPO_PROJECT'",returnType=True)[0].strip()
+                localInfo["Exist"][data.split(' ')[1]]= data.split(' ')[0].strip()
+    else:
+        numOfLocalProject = 0
+        localInfo=None
+
+    return numOfLocalProject, localInfo
+
+def compareSha1Value(srcInfo, branch):
+    masterInfo = getRecentSha1InBranch(srcInfo,branch)
+    numOfLocalProject, localInfo = getStatusLocal()
+
+    if not localInfo:
+        return numOfLocalProject, []
+
+    masterProjects = masterInfo.keys()
+    localProjects = localInfo["Exist"]
+
+    masterProjects.remove('platform/manifest')
+
+    syncTargetProject = localInfo["notExist"]
+
+    for project in localProjects.keys():
+        if masterInfo[project] != localProjects[project]:
+            print masterInfo[project] +" : " + localProjects[project]
+            syncTargetProject.append(project)
+
+    if len(list(set(syncTargetProject))) == numOfLocalProject:
+        return numOfLocalProject,[]
+    else:
+        return numOfLocalProject,syncTargetProject
+
+def checkOptions(opts, args):
+    if opts.url == None:
+        print "Input master server url should be given with -u option"
+        sys.exit(-1)
+
+    if opts.port == None:
+        print "Input master server port should be given with -p option"
+        sys.exit(-1)
+
+    if opts.branch == None:
+        print "Input branch name for conparation should be given with -b option"
+        sys.exit(-1)
+
+    # debugging message
+#    print "====== Debugging ======="
+#    print "options : %s" %opts
+#    print "args : %s" %args
+#    print "================================"
+
+
+def main(opts, args):
+    checkOptions(opts, args)
+
+    # Infomation
+    print "========== Infomation =========="
+    print " - branch : %s" %opts.branch
+    print " - port : %s" %opts.port
+    print " - url : %s" %opts.url
+    print "================================"
+
+    srcInfo={'port':opts.port, 'url':opts.url}
+    branch = opts.branch
+
+    syncTargetProject =[]
+
+    syncTargetProject.extend(getStatusManifest(branch))
+
+    numOfLocalProject, targetProject = compareSha1Value(srcInfo,branch)
+
+    syncTargetProject.extend(targetProject)
+
+
+    if not syncTargetProject and numOfLocalProject != 0:
+        print >> sys.stderr, "====== sync is not necessary ======"
+
+    else:
+        syncTargetProject = " ".join(list(set(syncTargetProject)))
+        print "====== sync start ======"
+        print "target project : %s" %syncTargetProject
+        runCmd('repo sync -d -c -j4 %s' %syncTargetProject)
+    runCmd("echo md5sum : $(repo forall -c 'git log -1 --pretty=format:%h' | md5sum)")
+
+
+if __name__ == "__main__":
+    parser = optparse.OptionParser()
+    for option in options:
+        param = option['name']
+        del option['name']
+        parser.add_option(*param, **option)
+
+    opts, args = parser.parse_args()
+    sys.argv[:] = args
+    main(opts, args)
