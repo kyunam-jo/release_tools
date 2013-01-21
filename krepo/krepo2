@@ -114,8 +114,11 @@ def compareSha1Value(srcInfo, branch):
     syncTargetProject = localInfo["notExist"]
 
     for project in localProjects.keys():
-        if masterInfo[project] != localProjects[project]:
-            print masterInfo[project] +" : " + localProjects[project]
+        try:
+            if masterInfo[project] != localProjects[project]:
+                print masterInfo[project] +" : " + localProjects[project]
+                syncTargetProject.append(project)
+        except KeyError:
             syncTargetProject.append(project)
 
     if len(list(set(syncTargetProject))) == numOfLocalProject:
