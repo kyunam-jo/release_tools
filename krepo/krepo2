@@ -2,9 +2,10 @@
 import optparse
 import subprocess
 import os, sys
+import xml.etree.ElementTree as ET
 
-option_0 = {'name': ('-p', '--port'), 'help' : 'Input master server port number', 'nargs' : 1}
-option_1 = {'name': ('-u', '--url'), 'help' : 'Input master server url', 'nargs' : 1}
+option_0 = {'name': ('-p', '--port'), 'help' : 'Input master server port number, default : 29475', 'nargs' : 1, 'default' : '29475'}
+option_1 = {'name': ('-u', '--url'), 'help' : 'Input master server url, default : lap.lge.com', 'nargs' : 1, 'default' : 'lap.lge.com'}
 option_2 = {'name': ('-b', '--branch'), 'help' : 'Input branch for conparation', 'nargs' : 1}
 
 options = [option_0, option_1, option_2]
@@ -52,8 +53,7 @@ def getRecentSha1InBranch(srcInfo, branch):
     return masterInfo
 
 
-def getStatusManifest(branch):
-    diffProject = []
+def updateManifest():
     changeRootDir()
     if os.path.isdir(".repo/manifests"):
         os.chdir(".repo/manifests")
@@ -64,67 +64,75 @@ def getStatusManifest(branch):
     if os.path.exists("default.xml"):
         returnValue=runCmd("git status", returnType=True)[0].strip().split('\n')
         if len(returnValue) > 2 :
-            diffProject = runCmd('git diff | grep "[+|-][ ]*<" | sed "s/^.*name=\"//g" | sed "s/\".*\/>//g"',returnType=True)[0].strip().split('\n')
-            if len(diffProject) == 0:
-                diffProject = runCmd('git diff HEAD | grep "[+|-][ ]*<" | sed "s/^.*name=\"//g" | sed "s/\".*\/>//g"',returnType=True)[0].strip().split('\n')
+            print >> sys.stderr, "# default.xml is changed, so not update manifest git"
         else:
-            runCmd('git fetch origin %s' %branch)
+            runCmd('git remote update')
             runCmd('git reset --hard FETCH_HEAD')
+    else:
+        print >> stderr, "fatal : please run repo init"
+        sys.exit(1)
 
-    return diffProject
 
+def getProjectInManifest():
+    updateManifest()
+    changeRootDir()
+    manifestFile = '.repo/manifests/default.xml'
 
+    if not os.path.exists(manifestFile):
+        print >> sys.stderr, "fatal : No such default.xml file"
+        sys.exit(1) 
 
-def getStatusLocal():
+    srcTree = ET.ElementTree()
+
+    srcRoot = srcTree.parse(manifestFile)
+
+    manifestProject =[]
+
+    for node in srcRoot:
+        if node.tag == 'project':
+            try:
+                node.attrib['groups'].strip().split(',').index('notdefault')
+            except (KeyError, ValueError):
+                manifestProject.append(node.attrib['path'] + ' : ' +node.attrib['name'])
+        else:
+            continue
+
+    return manifestProject
+
+def getStatusLocal(projects):
     localInfo={"notExist" : [], "Exist" : {}}
 
-    returnValue=runCmd('repo list -f', returnType=True)[0].strip().split('\n')
-
-    numOfLocalProject = len(returnValue)
-
-    for num in range(returnValue.count('')):
-        returnValue.remove('')
-
-    if returnValue:
-        for project in returnValue:
+    if projects:
+        for project in projects:
             if not os.path.isdir(project.split(':')[0].strip() + '/.git'):
                 localInfo["notExist"].append(project.split(':')[1].strip())
             else:
                 data=runCmd("echo $(git --git-dir=" + project.split(':')[0].strip() + "/.git log -1 --pretty=format:%H) " + project.split(':')[1].strip(),returnType=True)[0].strip()
-#                data=runCmd("repo forall " + project.split(':')[1].strip() + " -c 'echo $(git log -1 --pretty=format:%H) $REPO_PROJECT'",returnType=True)[0].strip()
                 localInfo["Exist"][data.split(' ')[1]]= data.split(' ')[0].strip()
     else:
-        numOfLocalProject = 0
         localInfo=None
 
-    return numOfLocalProject, localInfo
+    return localInfo
 
-def compareSha1Value(srcInfo, branch):
-    masterInfo = getRecentSha1InBranch(srcInfo,branch)
-    numOfLocalProject, localInfo = getStatusLocal()
+def compareSha1Value(masterInfo, localInfo):
 
-    if not localInfo:
-        return numOfLocalProject, []
+    returnProject = []
 
     masterProjects = masterInfo.keys()
-    localProjects = localInfo["Exist"]
+    localProjects = localInfo.keys()
 
     masterProjects.remove('platform/manifest')
 
-    syncTargetProject = localInfo["notExist"]
-
-    for project in localProjects.keys():
+    for project in localProjects:
         try:
-            if masterInfo[project] != localProjects[project]:
-                print masterInfo[project] +" : " + localProjects[project]
-                syncTargetProject.append(project)
+            if masterInfo[project] != localInfo[project]:
+                print project + " : " + masterInfo[project] +" : " + localInfo[project]
+                returnProject.append(project)
         except KeyError:
-            syncTargetProject.append(project)
+            print "%s is not included in this branch" %project
+            returnProject.append(project)
 
-    if len(list(set(syncTargetProject))) == numOfLocalProject:
-        return numOfLocalProject,[]
-    else:
-        return numOfLocalProject,syncTargetProject
+    return returnProject
 
 def checkOptions(opts, args):
     if opts.url == None:
@@ -158,23 +166,36 @@ def main(opts, args):
 
     srcInfo={'port':opts.port, 'url':opts.url}
     branch = opts.branch
-
+        
     syncTargetProject =[]
 
-    syncTargetProject.extend(getStatusManifest(branch))
+    manifestProject = getProjectInManifest()
 
-    numOfLocalProject, targetProject = compareSha1Value(srcInfo,branch)
+    localInfo = getStatusLocal(manifestProject)
 
-    syncTargetProject.extend(targetProject)
+    syncTargetProject.extend(localInfo['notExist'])
 
+    masterInfo = getRecentSha1InBranch(srcInfo,branch)
 
-    if not syncTargetProject and numOfLocalProject != 0:
-        print >> sys.stderr, "====== sync is not necessary ======"
+    syncTargetProject.extend(compareSha1Value(masterInfo,localInfo['Exist']))
 
+    for num in range(syncTargetProject.count('')):
+        syncTargetProject.remove('')
+
+    syncTargetProject = list(set(syncTargetProject))
+    numOfSyncTargetProject = len(syncTargetProject)
+
+    if numOfSyncTargetProject == 0:
+        print "========== sync is not necessary =========="
     else:
-        syncTargetProject = " ".join(list(set(syncTargetProject)))
-        print "====== sync start ======"
-        print "target project : %s" %syncTargetProject
+        if numOfSyncTargetProject == len(manifestProject):
+            print "========== full sync is starting =========="
+            syncTargetProject = '' 
+
+        else :
+            syncTargetProject = " ".join(syncTargetProject)
+            print "========== some projects sync is starting =========="
+            print "target project : %s" %syncTargetProject
         runCmd('repo sync -d -c -j4 %s' %syncTargetProject)
     runCmd("echo md5sum : $(repo forall -c 'git log -1 --pretty=format:%h' | md5sum)")
 
