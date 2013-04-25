@@ -1,7 +1,7 @@
 #! /usr/bin/env python
 import optparse
 import subprocess
-import os, sys
+import os, sys, time
 import xml.etree.ElementTree as ET
 
 option_0 = {'name': ('-p', '--port'), 'help' : 'Input master server port number, default : 29475', 'nargs' : 1, 'default' : '29475'}
@@ -9,6 +9,8 @@ option_1 = {'name': ('-u', '--url'), 'help' : 'Input master server url, default 
 option_2 = {'name': ('-b', '--branch'), 'help' : 'Input branch for conparation', 'nargs' : 1}
 
 options = [option_0, option_1, option_2]
+
+remoteName=''
 
 def changeRootDir():
     while True:
@@ -53,7 +55,7 @@ def getRecentSha1InBranch(srcInfo, branch):
     return masterInfo
 
 
-def updateManifest():
+def updateManifest(branch):
     changeRootDir()
     if os.path.isdir(".repo/manifests"):
         os.chdir(".repo/manifests")
@@ -67,16 +69,18 @@ def updateManifest():
             print >> sys.stderr, "# default.xml is changed, so not update manifest git"
         else:
             runCmd('git remote update')
-            runCmd('git reset --hard FETCH_HEAD')
+            runCmd('git reset --hard origin/%s' %branch)
     else:
         print >> stderr, "fatal : please run repo init"
         sys.exit(1)
 
 
-def getProjectInManifest():
-    updateManifest()
+def getProjectInManifest(branch):
+    updateManifest(branch)
     changeRootDir()
     manifestFile = '.repo/manifests/default.xml'
+
+    global remoteName
 
     if not os.path.exists(manifestFile):
         print >> sys.stderr, "fatal : No such default.xml file"
@@ -86,29 +90,37 @@ def getProjectInManifest():
 
     srcRoot = srcTree.parse(manifestFile)
 
-    manifestProject =[]
+    manifestProject = {}
 
     for node in srcRoot:
         if node.tag == 'project':
             try:
                 node.attrib['groups'].strip().split(',').index('notdefault')
             except (KeyError, ValueError):
-                manifestProject.append(node.attrib['path'] + ' : ' +node.attrib['name'])
+                try:
+                    manifestProject[node.attrib['name'].strip()] = node.attrib['path'].strip()
+                except (KeyError, ValueError):
+                    manifestProject[node.attrib['name'].strip()] = node.attrib['name'].strip()
+        elif node.tag == 'default':
+            remoteName = node.attrib['remote']        
+
         else:
             continue
 
     return manifestProject
 
 def getStatusLocal(projects):
-    localInfo={"notExist" : [], "Exist" : {}}
+    changeRootDir()
+
+    localInfo={"notExist" : {}, "Exist" : {}}
 
     if projects:
-        for project in projects:
-            if not os.path.isdir(project.split(':')[0].strip() + '/.git'):
-                localInfo["notExist"].append(project.split(':')[1].strip())
+        for name in projects.keys():
+            if not os.path.isdir(projects[name].strip() + '/.git'):
+                localInfo["notExist"][name] = projects[name]
             else:
-                data=runCmd("echo $(git --git-dir=" + project.split(':')[0].strip() + "/.git log -1 --pretty=format:%H) " + project.split(':')[1].strip(),returnType=True)[0].strip()
-                localInfo["Exist"][data.split(' ')[1]]= data.split(' ')[0].strip()
+                data=runCmd("git --git-dir=" + projects[name] + "/.git log -1 --pretty=format:%H",returnType=True)[0].strip()
+                localInfo["Exist"][name]= {'path' : projects[name], 'sha1' : data }
     else:
         localInfo=None
 
@@ -125,14 +137,26 @@ def compareSha1Value(masterInfo, localInfo):
 
     for project in localProjects:
         try:
-            if masterInfo[project] != localInfo[project]:
-                print project + " : " + masterInfo[project] +" : " + localInfo[project]
+            if masterInfo[project] != localInfo[project]['sha1']:
+                print project + " : " + masterInfo[project] +" : " + localInfo[project]['sha1']
                 returnProject.append(project)
         except KeyError:
             print "%s is not included in this branch" %project
             returnProject.append(project)
 
     return returnProject
+
+def getTargetBranch():
+    changeRootDir()
+    if os.path.isdir('.repo/manifests.git'):
+        os.chdir('.repo/manifests.git')
+    else:
+        print >> sys.stderr, "fatal : manifests.git folder is not exist"
+        sys.exit(1)
+
+    currentBranch = runCmd('git config branch.default.merge', returnType=True)[0].strip().split('\n')
+    
+    return currentBranch[0]
 
 def checkOptions(opts, args):
     if opts.url == None:
@@ -144,8 +168,10 @@ def checkOptions(opts, args):
         sys.exit(-1)
 
     if opts.branch == None:
-        print "Input branch name for conparation should be given with -b option"
-        sys.exit(-1)
+        opts.branch = getTargetBranch()
+        print "current Branch is %s" %opts.branch
+#        print "Input branch name for conparation should be given with -b option"
+#        sys.exit(-1)
 
     # debugging message
 #    print "====== Debugging ======="
@@ -153,9 +179,10 @@ def checkOptions(opts, args):
 #    print "args : %s" %args
 #    print "================================"
 
+    return opts, args
 
 def main(opts, args):
-    checkOptions(opts, args)
+    opts, args = checkOptions(opts, args)
 
     # Infomation
     print "========== Infomation =========="
@@ -169,11 +196,11 @@ def main(opts, args):
         
     syncTargetProject =[]
 
-    manifestProject = getProjectInManifest()
+    manifestProject = getProjectInManifest(branch)
 
     localInfo = getStatusLocal(manifestProject)
 
-    syncTargetProject.extend(localInfo['notExist'])
+    syncTargetProject.extend(localInfo['notExist'].keys())
 
     masterInfo = getRecentSha1InBranch(srcInfo,branch)
 
@@ -185,18 +212,36 @@ def main(opts, args):
     syncTargetProject = list(set(syncTargetProject))
     numOfSyncTargetProject = len(syncTargetProject)
 
+
     if numOfSyncTargetProject == 0:
         print "========== sync is not necessary =========="
     else:
+
         if numOfSyncTargetProject == len(manifestProject):
             print "========== full sync is starting =========="
             syncTargetProject = '' 
 
         else :
+            changeRootDir()
+            for name in localInfo['Exist'].keys():
+                if not os.path.exists("%s/.git/refs/remotes/%s/%s" %(localInfo['Exist'][name]['path'],remoteName,branch)):
+#                    print "%s/.git/refs/remotes/%s/%s" %(localInfo['Exist'][name]['path'],remoteName,branch)
+#                    cmd = "git --git-dir=%s/.git fetch %s %s:refs/remotes/%s/%s &" %(localInfo['Exist'][name]['path'], remoteName,branch,remoteName,branch)
+                    runCmd('mkdir -p %s/.git/refs/remotes/%s' %(localInfo['Exist'][name]['path'],remoteName))
+                    branchFile= file("%s/.git/refs/remotes/%s/%s" %(localInfo['Exist'][name]['path'],remoteName,branch), 'w')
+                    branchFile.writelines(localInfo['Exist'][name]['sha1'])
+                    branchFile.close()
+#                    runCmd(cmd)
+#                    while True:
+#                        theadNum = int(runCmd('ps | grep ssh | wc -l',returnType=True)[0].strip())
+#                        if theadNum < 10:
+#                            break
+#                        else:
+#                            time.sleep(1)
             syncTargetProject = " ".join(syncTargetProject)
             print "========== some projects sync is starting =========="
             print "target project : %s" %syncTargetProject
-        runCmd('repo sync -d -c -j4 %s' %syncTargetProject)
+        runCmd('repo sync -c -d -j4 %s' %syncTargetProject)
     runCmd("echo md5sum : $(repo forall -c 'git log -1 --pretty=format:%h' | md5sum)")
 
 
