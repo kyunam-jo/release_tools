@@ -28,6 +28,13 @@ def getProjectList():
         queue.put(context.strip())
     return queue
 
+def checkMirrorType():
+    mirrorType=runCmd("git config repo.mirror", returnType=True, loc=".repo/manifests")[0].strip()
+    if not mirrorType:
+        return False
+    else:
+        return True
+
 def getProjectListRepo():
     ret = runCmd('repo list', returnType=True)
     repoList = Queue.Queue()
@@ -58,13 +65,15 @@ def runCmd(cmd, shell=True, returnType=False ,loc=None):
     return p.communicate()
 
 
-def runCmdThread(jobs, cmd, project):
-#    print jobs.value
-#    jobs.value += 1
+def runCmdThread(jobs, cmd, project, mirrorType):
     setenv('REPO_PROJECT',project[1])
     setenv('REPO_PATH',project[0])
-    if os.path.isdir(project[0]):
-        runCmd(cmd, loc=project[0])
+    if mirrorType:
+        path=project[1]+".git"
+    else:
+        path=project[0]
+    if os.path.isdir(path):
+        runCmd(cmd, loc=path)
     jobs.value -= 1
 
 
@@ -84,23 +93,23 @@ def runCommand(args):
         if isinstance(int(args[0]), int) and int(args[0]) >= 1:
             tot_jobs = int(args[0])
         else:
-            print "fatal : first argument is greater than 1"
+            print >> sys.stderr, "fatal : first argument is greater than 1"
             sys.exit(-1)
     except ValueError:
-        print "fatal : first argument must be INTEGER"
+        print >> sys.stderr , "fatal : first argument must be INTEGER"
         sys.exit(-1)
     cmd = ''
+    mirrorType = checkMirrorType()
     for i in range(1,len(args)):
         cmd += args[i] + ' '
     while True:
         if  cur_jobs.value <= tot_jobs and cur_jobs.value >= 0:
             project = repoList.get()
-#           print project
             if repoList.empty():
                 break
             else:
                 cur_jobs.value += 1
-                process = Process(target=runCmdThread, args=(cur_jobs, cmd, project,))
+                process = Process(target=runCmdThread, args=(cur_jobs, cmd, project, mirrorType,))
                 process.start()
         else:
             continue
@@ -111,7 +120,7 @@ def main(args):
     try:
         runCommand(args)
     except (KeyboardInterrupt):
-        print '\nReceived keyboard interrupt, quitting threads. \n'
+        print >>sys.stderr, '\nReceived keyboard interrupt, quitting threads. \n'
         sys.exit(0)
         
 def usage():
