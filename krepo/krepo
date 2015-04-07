@@ -1,80 +1,91 @@
-#!/usr/bin/python
-import optparse
-import subprocess
-from multiprocessing import Process, Value
+#!/usr/bin/env python
+from multiprocessing import Process, Manager
 import os, sys
-import Queue
+import time
+import xml.etree.ElementTree as ET
+import re
+from kyulib import utils
 
 
-def changeRootDir():
-    while True:
-        loc = os.getcwd()
-        if loc == '/':
-            print 'error: repo is not installed.  Use "repo init" to install it here.'
-            sys.exit(-1)
-        else:
-            if os.path.isdir('.repo'):
-                return loc
+ID_RE = re.compile(r'^[0-9a-f]{40}$')
+
+VersionInfo = "1.1-draft"
+
+Verbose = False
+
+def checkManifestConfig():
+    mirrorType=utils.exec_cmd("git config repo.mirror", returnType=True, loc=".repo/manifests")[0].strip()
+    groups=utils.exec_cmd("git config manifest.groups", returnType=True, loc=".repo/manifests")[0].strip()
+    return mirrorType != "" , groups
+
+
+def getManifestInfo(project, default, manifestFile=None):
+    utils.change_parent_dir(".repo")
+
+    if manifestFile == None:
+        manifestFile = '.repo/manifest.xml'
+
+    if not os.path.exists(manifestFile):
+        print >> sys.stderr, "fatal : No such default.xml file"
+        sys.exit(1)
+
+    srcTree = ET.ElementTree()
+    srcRoot = srcTree.parse(manifestFile)
+
+    for node in srcRoot:
+        if node.tag == "default":
+            if len(default) == 0:
+                default.update(node.attrib)
             else:
-                os.chdir('..')
+                print >> sys.stderr, ">>fatal: default value is not set twice"
+                sys.exit(-1)
+        elif node.tag == 'project':
+            project.append(node.attrib)
+        elif node.tag == 'include':
+            includedManifestFile = ".repo/manifests/"+node.attrib['name'].strip()
+            print includedManifestFile
+            if os.path.exists(includedManifestFile):
+                getManifestInfo(project, default, includedManifestFile)
+        else:
+            continue
 
-def getProjectList():
-    queue = Queue.Queue()
-    List = open('.repo/project.list','r')
-    while True:
-        context = List.readline()
-        if not context:
-            break
-        queue.put(context.strip())
-    return queue
 
-def checkMirrorType():
-    mirrorType=runCmd("git config repo.mirror", returnType=True, loc=".repo/manifests")[0].strip()
-    if not mirrorType:
-        return False
+def runCmdThread(jobs, cmd, project, mirrorType, default,print_project, output=None):
+
+    name = project["name"]
+
+    if project.has_key("path"):
+        path = project["path"]
     else:
-        return True
+        path = name
 
-def getProjectListRepo():
-    ret = runCmd('repo list', returnType=True)
-    repoList = Queue.Queue()
-    if not ret:
-        sys.exit(-1)
-    for content in ret[0].strip().split('\n'):
-        repoList.put(content.split(' : '))
-    repoList.put('STOP')
-    return repoList
+    if project.has_key("revision"):    
+        if ID_RE.match(project["revision"]) and project.has_key("upstream"):
+            setenv('REPO_RREV', project['upstream'])
+        else:
+            setenv('REPO_RREV', project['revision'])
 
-
-def runCmd(cmd, shell=True, returnType=False ,loc=None):
-    if returnType:
-        stdin = subprocess.PIPE
-        stdout = subprocess.PIPE
-        stderr = subprocess.PIPE
     else:
-        stdin=None
-        stdout=None
-        stderr=None
-    p = subprocess.Popen(cmd,
-                         cwd=loc,
-                         shell=shell,
-                         stdin=stdin,
-                         stdout=stdout,
-                         stderr=stderr,
-                         executable='/bin/bash')
-    return p.communicate()
+        setenv('REPO_RREV', default[0]['revision'])
 
+    setenv('REPO_PROJECT',name)
+    setenv('REPO_PATH',path)
 
-def runCmdThread(jobs, cmd, project, mirrorType):
-    setenv('REPO_PROJECT',project[1])
-    setenv('REPO_PATH',project[0])
     if mirrorType:
-        path=project[1]+".git"
+        path=name +".git"
+
+    if os.path.exists(path):
+        if print_project:
+            out = utils.exec_cmd(cmd, returnType=True, loc=path)[0]
+            if out != "" :
+                output.put([path, out])
+        else:
+            utils.exec_cmd(cmd, loc=path)
     else:
-        path=project[0]
-    if os.path.isdir(path):
-        runCmd(cmd, loc=path)
-    jobs.value -= 1
+        utils.print_err("Skippring " + path + " is not exist")
+
+    jobs.value = jobs.value + 1
+    utils.print_verbose(sys.stderr, ">> project : " + name + " is ended")
 
 
 def setenv(name, val):
@@ -82,54 +93,142 @@ def setenv(name, val):
 
 
 def runCommand(args):
-    repoList = getProjectListRepo()
-    root = changeRootDir()
-    tot_jobs=0
-    cur_jobs = Value('i',0)
-    job_list =[]
-    if args[0] == '-h':
-        usage()
-    try:
-        if isinstance(int(args[0]), int) and int(args[0]) >= 1:
-            tot_jobs = int(args[0])
-        else:
-            print >> sys.stderr, "fatal : first argument is greater than 1"
-            sys.exit(-1)
-    except ValueError:
-        print >> sys.stderr , "fatal : first argument must be INTEGER"
-        sys.exit(-1)
-    cmd = ''
-    mirrorType = checkMirrorType()
-    for i in range(1,len(args)):
-        cmd += args[i] + ' '
+    utils.change_parent_dir(".repo")
+    
+    manager = Manager()
+    tot_jobs=args["job_number"]
+    cmd = args["command"]
+    print_project = args["print_project"]
+    cur_jobs = manager.Value('i', tot_jobs)
+    mirrorType, groups = checkManifestConfig()
+
+    projects = []
+    default = {}
+    getManifestInfo(projects, default)
+
+    if groups.find("notdefault") == -1:
+        tmp = []
+        for item in projects:
+            if item.has_key("groups"):
+                if item["groups"].find("notdefault") == -1 :
+                    tmp.append(item)
+                else:
+                    continue
+            else:
+                tmp.append(item)
+        projects = tmp
+
+    output = manager.Queue()
+    process_list = []
+    processes = [ Process(target=runCmdThread, args=(cur_jobs, cmd, project, mirrorType, default,print_project, output)) for project in projects ]
+    processes.reverse()
+
     while True:
-        if  cur_jobs.value <= tot_jobs and cur_jobs.value >= 0:
-            project = repoList.get()
-            if repoList.empty():
+        if len(processes) != 0:
+            if cur_jobs.value > 0:
+                utils.print_verbose(sys.stderr, ">> %dth project is starting" %len(processes))
+                cur_jobs.value = cur_jobs.value -1
+                proc = processes.pop()
+                process_list.append(proc)
+                proc.start()
+            else:
+                time.sleep(0.001)
+                utils.print_verbose(sys.stderr, ">> Processes's starting is pending")
+                continue
+        else:
+            utils.print_verbose(sys.stderr, ">> processes is ended")
+            break
+
+    for num in range(len(process_list)):
+        if process_list[num].is_alive():
+            utils.print_verbose(sys.stderr,  ">> process is join start : %d" %num)
+            process_list[num].join()
+
+    if int(output.qsize()) != 0:
+        while True:
+            if output.empty():
                 break
             else:
-                cur_jobs.value += 1
-                process = Process(target=runCmdThread, args=(cur_jobs, cmd, project, mirrorType,))
-                process.start()
-        else:
-            continue
+                item = output.get()
+                print "projects " + item[0]
+                print item[1]
 
-def main(args):
+
+def parsedArgs(args):
+    arg_dic = {"print_project": False,
+               "job_number": 1,
+               "command" : ""}
+
     if not args or args[0] == '-h' or args[0] == "--help":
         usage()
-    try:
-        runCommand(args)
-    except (KeyboardInterrupt):
-        print >>sys.stderr, '\nReceived keyboard interrupt, quitting threads. \n'
         sys.exit(0)
-        
+
+    while args:
+        arg = args[0]
+        if arg.startswith("-"):
+            if arg == '-h' or arg == "--help":
+                usage()
+                sys.exit(0)
+            if arg == '-v' or arg == "--verbose":
+                global Verbose
+                Verbose = True
+            elif arg == "-c":
+                arg_dic["command"] = "".join([ c+" "for c in args[1:] ] )
+                break;
+
+            elif arg == "-p":
+                arg_dic["print_project"] = True
+
+            elif arg.startswith("-j"):
+                if len(arg) == 2:
+                    job_num = args[1]
+                else:
+                    job_num = arg[2:]
+                try:
+                    if isinstance(int(job_num), int) and int(job_num) >= 0:
+                        arg_dic["job_number"] = int(job_num)
+                    else:
+                        utils.print_err( "fatal : first argument is greater than 0")
+                        sys.exit(-1)
+                except ValueError:
+                    utils.print_err( "fatal : first argument must be INTEGER")
+                    sys.exit(-1)
+            else:
+                utils.print_err("fatal : Not supported options")
+                usage()
+                sys.exit(-1)
+
+        args = args[1:]
+
+    if arg_dic["command"] == "" :
+        utils.print_err("fatal : Please type command with -c option")
+        usage()
+        sys.exit(-1)
+
+    return arg_dic
+
+
+def main(args):
+    try:
+        runCommand(parsedArgs(args))
+    except (KeyboardInterrupt):
+        utils.print_err('\nReceived keyboard interrupt, quitting threads. \n')
+        sys.exit(0)
+
+
 def usage():
-   print >>sys.stderr, \
-""" Usage : krepo [Thread Num] COMMAND
-
-ex) krepo 10 git push lap HEAD:capp_ics
-
+    utils.print_err(\
 """
+Usage: krepo [Options] -c <command>
+
+Options:
+    -j JOBS    number of commands to execute simultaneously (default 1)
+    -c COMMAND Command (and arguments) to execute
+
+Output:
+    -p        Show project headers before output
+""")
+
 
 if __name__ == "__main__":
     main(sys.argv[1:])

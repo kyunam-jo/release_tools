@@ -1,0 +1,178 @@
+#!/usr/bin/env python
+
+import sys
+import os
+import re
+from kyulib import utils
+from optparse import OptionParser
+from multiprocessing import Manager, Process, Pool
+import time
+
+parser = OptionParser(description="Searching unresolved conflict files")
+
+parser.add_option('-v', '--verbose', dest="verbose", action="store_true",
+                 default=False, help="print pass project")
+parser.add_option('-f', '--filename', dest="file_name",
+                 help="type conflict list file name ")
+parser.add_option('-s', '--search_base', dest="search_base",
+                 help="type merged tag or branch ")
+parser.add_option('-j', '--jobs', default=1,
+                 help="type job number")
+
+
+Verbose = False
+
+DIFF_RE_STRING = "^(<<<<* HEAD|>>>>* .*SEARCH_BASE.*)$"
+
+def get_conflict_list(filename):
+    listfile = file(filename, 'r')
+    conflict_list = {}
+    project_name = ""
+    file_name = ""
+
+    for context in listfile.readlines():
+        if context.strip().startswith('project'):
+            project_name = context.strip().replace('project ','')
+            utils.print_verbose(sys.stderr, 'PROJECT_NAME = ' + project_name)
+        elif context.strip().startswith("UU"):
+            file_name = context.strip().replace('UU ','')
+            utils.print_verbose(sys.stderr, 'FILE_NAME = ' +  file_name)
+            if not conflict_list.has_key(project_name):
+                conflict_list[project_name] = [file_name]
+            else:
+                conflict_list[project_name].append(file_name)
+        else:
+            continue
+    if len(conflict_list) != 0:
+        return conflict_list
+    else:
+        utils.print_err("fatal : this file is not correct file included contents of conflict")
+        sys.exit(-1)
+
+
+def find_string_in_files(files, regex):
+    line_num = 0
+    buff = []
+    for f in files:
+        if utils.exec_cmd("file " + f, returnType=True)[0].find('text') != -1:
+            for line in file(f, 'r').readlines():
+                line_num = line_num + 1
+                context = regex.search(line)
+                if context:
+                    buff.append(f + ":" + str(line_num) + ':' + context.group())
+
+    return buff
+
+
+
+def find_conflict(conflict_dic, regex):
+    utils.change_parent_dir(".repo")
+    for path in conflict_dic.keys():
+        if os.path.exists(path):
+            os.chdir(path)
+            result = find_string_in_files(conflict_dic[path], regex)
+            if result != []:
+                print "project : " + path
+                print ''.join([ line + '\n' for line in result ])
+            utils.change_parent_dir(".repo")
+
+
+
+def thread_target(workers_pool, output_queue, path, regex):
+    if os.path.exists(path):
+        results = []
+        os.chdir(path)
+        utils.print_verbose(sys.stderr, ">> Start Searching in " + path)
+        files = utils.find_all_file_in_dir('./')
+
+        if len(files) > 0 :
+            file_list =[files[i:i + 10] for i in range(0, len(files), 10)]
+            proc = Pool(processes=10)
+            results = [ proc.apply_async(find_string_in_files, args=(f, regex)).get() for f in file_list ]
+            utils.print_verbose(sys.stderr, ">> End Searching in " + path)
+
+            ret = []
+            for r in results:
+                if r != []:
+                    ret.append(''.join([ line + '\n' for line in r]))
+
+            if  ret != []:
+                    output_queue.put( ["project : " + path, ''.join(ret)] )
+
+    workers_pool.value = workers_pool.value + 1
+
+
+# all files in dir
+def find_conflict_all(jobs, regex):
+    utils.change_parent_dir(".repo")
+    ret = utils.exec_cmd('repo list -p', returnType=True)
+    repoList = ret[0].strip().split('\n')
+    temp=[]
+    for name in repoList:
+        if name.find('vendor/lge') == -1:
+            temp.append(name)
+
+    repoList = temp
+    manager = Manager()
+    output_queue = manager.Queue()
+    workers_pool = manager.Value('i', min(100,jobs))
+    process_list = []
+
+    processes = [ Process(target=thread_target, args=(workers_pool, output_queue, path, regex)) for path in repoList ]
+    processes.reverse()
+
+    process_num = len(processes)
+
+    while True:
+        if len(processes) != 0:
+            if workers_pool.value > 0:
+                print >> sys.stderr, "Searching projects (%d/%d)\r" %(process_num - len(processes), process_num),
+                workers_pool.value = workers_pool.value -1
+                proc = processes.pop()
+                process_list.append(proc)
+                proc.start()
+            else:
+                time.sleep(0.001)
+                continue
+        else:
+            if len(process_list) == 0:
+                if output_queue.empty():
+                    break
+            else:
+                proc = []
+                for p in process_list:
+                    if p.is_alive():
+                        proc.append(p)
+                process_list = proc
+
+            if not output_queue.empty():
+                    prj, line = output_queue.get()
+                    print prj
+                    print line
+            else:
+                time.sleep(0.001)
+                print >> sys.stderr, "%d projects are remained(%d)\r" %(len(process_list), process_num),
+                continue
+
+
+def main(opt, args):
+    global Verbose
+    Verbose = opt.verbose
+    DIFF_RE = re.compile(DIFF_RE_STRING.replace("SEARCH_BASE", opt.search_base))
+    if opt.file_name != None:
+        if os.path.exists(opt.file_name.strip()):
+            find_conflict(get_conflict_list(opt.file_name), DIFF_RE)
+        else:
+            utils.print_err( "fatal : conflict file is not exist")
+    else:
+        try:
+            find_conflict_all(int(opt.jobs), DIFF_RE)
+        except KeyboardInterrupt:
+            sys.exit()
+        finally:
+            pass
+
+
+if __name__ == "__main__":
+    opt, args = parser.parse_args()
+    main(opt, args)
