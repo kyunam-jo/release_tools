@@ -3,7 +3,7 @@
 import sys
 import os
 import re
-from kyulib import utils
+from libs import utils
 from optparse import OptionParser
 from multiprocessing import Manager, Process, Pool
 import time
@@ -20,7 +20,7 @@ parser.add_option('-j', '--jobs', default=1,
                  help="type job number")
 
 
-Verbose = False
+Verbose = utils.Verbose
 
 DIFF_RE_STRING = "^(<<<<* HEAD|>>>>* .*SEARCH_BASE.*)$"
 
@@ -46,8 +46,7 @@ def get_conflict_list(filename):
     if len(conflict_list) != 0:
         return conflict_list
     else:
-        utils.print_err("fatal : this file is not correct file included contents of conflict")
-        sys.exit(-1)
+        utils.print_err("fatal : this file is not correct file included contents of conflict", exit=-1)
 
 
 def find_string_in_files(files, regex):

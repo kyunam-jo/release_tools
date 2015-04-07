@@ -22,15 +22,16 @@ def exec_cmd(cmd, shell=True, returnType=False ,loc=None):
     return p.communicate()
 
 def watch_parent_dir(name):
-    root = os.getcwd()
+    cwd = os.getcwd()
     while True:
         loc = os.getcwd()
+        print loc
         if loc == '/':
-            os.chdir(root)
+            os.chdir(cwd)
             return None
         else:
             if os.path.exists(name) and os.path.isdir(name):
-                os.chdir(root)
+                os.chdir(cwd)
                 return loc
             else:
                 os.chdir('..')
@@ -64,13 +65,17 @@ def find_all_file_in_dir(dir_name):
                     all_files.append(full_name)
     return all_files
 
-def print_verbose(print_type, values):
+
+Verbose = False
+
+def print_verbose(values):
     if Verbose == True:
-        print >> print_type, str(values)
+        print >> sys.stderr, str(values)
 
 
-def print_err(valuse):
+def print_err(valuse, exit=None):
     print >> sys.stderr, str(valuse)
+    if exit != None and isinstance(exit, int): sys.exit(exit)
 
 
 if __name__ == "__main__":

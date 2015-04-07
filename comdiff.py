@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 
-from optparse import OptionParser
-import xml.etree.ElementTree as ET
 import sys,os
 import re
+import xml.etree.ElementTree as ET
+from libs import utils
+from optparse import OptionParser
 
 ID_RE = re.compile(r'^[0-9a-f]{40}$')
 
@@ -18,21 +19,11 @@ parser.add_option('-c', '--common', dest="common", action="store_true",
 parser.add_option('-d', '--diff', dest="diff", action="store_true",
                  default=False, help="print differential project")
 
-def changeRootDir():
-    while True:
-        loc = os.getcwd()
-        if loc == '/':
-            print 'error: repo is not installed.  Use "repo init" to install it here.'
-            sys.exit(-1)
-        else:
-            if os.path.isdir('.repo'):
-                return loc
-            else:
-                os.chdir('..')
 
+Verbose = utils.Verbose
 
 def getManifestInfo(project, default, manifestFile=None):
-    changeRootDir()
+    utils.change_parent_dir(".repo")
 
     if manifestFile == None:
         manifestFile = '.repo/manifest.xml'
@@ -63,6 +54,9 @@ def getManifestInfo(project, default, manifestFile=None):
 
 
 def main(options, args):
+    global Verbose
+    Verbose = options.verbose
+
     common = []
     diff = []
     projects = []
@@ -73,18 +67,17 @@ def main(options, args):
         if os.path.exists(args[0]):
             getManifestInfo(projects, default, manifestFile=args[0])
         else:
-            print >> sys.stderr, "fatal : manifest file is not exist"
+            utils.print_err("fatal : manifest file is not exist")
             sys.exit(-1)
     elif len(args) == 0:
-            projects, default = getManifestInfo()
+            projects, default = getManifestInfo(projects, default)
     else:
-        print >> sys.stderr, "fatal : argument's length is only 1"
+        utils.print_err("fatal : argument's length is only 1")
         sys.exit(-1)
 
     for prj in projects:
         if prj['name'].find('device/lge') != -1 or prj['name'].find('vendor/lge') != -1 or prj['name'].find('LG_apps') != -1:
-            if options.verbose:
-                print >> sys.stderr, "pass : " + prj['name']
+            utils.print_verbose("pass : " + prj['name'])
             continue
         if prj.has_key('revision'):
             if ID_RE.match(prj["revision"]):
@@ -103,15 +96,10 @@ def main(options, args):
         else:
             common.append(prj)
 
-    if options.common :
-        for prj in common:
-            print prj['name']
-    elif options.diff:
-        for prj in diff:
-            print prj['name']
+    if options.common and len(common) !=0 : print "\n".join(common)
+    elif options.diff and len(diff) != 0:   print "\n".join(diff)
     else:
-        print >> sys.stderr, "fatal: please choose -c or -d options"
-        sys.exit(-1)
+        utils.print_err("fatal: please choose -c or -d options", exit=-1)
 
 
 if __name__ == "__main__":
