@@ -25,7 +25,6 @@ def watch_parent_dir(name):
     cwd = os.getcwd()
     while True:
         loc = os.getcwd()
-        print loc
         if loc == '/':
             os.chdir(cwd)
             return None
@@ -73,9 +72,9 @@ def print_verbose(values):
         print >> sys.stderr, str(values)
 
 
-def print_err(valuse, exit=None):
+def print_err(valuse, exit_code=None):
     print >> sys.stderr, str(valuse)
-    if exit != None and isinstance(exit, int): sys.exit(exit)
+    if exit_code != None and isinstance(exit_code, int): sys.exit(exit_code)
 
 
 if __name__ == "__main__":

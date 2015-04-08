@@ -1,13 +1,12 @@
 #!/usr/bin/env python
 
-import sys,os
+import os
 import re
 import xml.etree.ElementTree as ET
 from libs import utils
 from optparse import OptionParser
 
 ID_RE = re.compile(r'^[0-9a-f]{40}$')
-
 
 parser = OptionParser(description="Get common project")
 
@@ -20,8 +19,6 @@ parser.add_option('-d', '--diff', dest="diff", action="store_true",
                  default=False, help="print differential project")
 
 
-Verbose = utils.Verbose
-
 def getManifestInfo(project, default, manifestFile=None):
     utils.change_parent_dir(".repo")
 
@@ -29,8 +26,7 @@ def getManifestInfo(project, default, manifestFile=None):
         manifestFile = '.repo/manifest.xml'
 
     if not os.path.exists(manifestFile):
-        print >> sys.stderr, "fatal : No such default.xml file"
-        sys.exit(1)
+        utils.print_err("fatal : No such default.xml file", exit_code=-1)
 
     srcTree = ET.ElementTree()
     srcRoot = srcTree.parse(manifestFile)
@@ -40,13 +36,11 @@ def getManifestInfo(project, default, manifestFile=None):
             if len(default) == 0:
                 default.update(node.attrib)
             else:
-                print >> sys.stderr, ">>fatal: default value is not set twice"
-                sys.exit(-1)
+                utils.print_err(">>fatal: default value is not set twice", exit_code=-1)
         elif node.tag == 'project':
             project.append(node.attrib)
         elif node.tag == 'include':
             includedManifestFile = ".repo/manifests/"+node.attrib['name'].strip()
-            print includedManifestFile
             if os.path.exists(includedManifestFile):
                 getManifestInfo(project, default, includedManifestFile)
         else:
@@ -54,9 +48,7 @@ def getManifestInfo(project, default, manifestFile=None):
 
 
 def main(options, args):
-    global Verbose
-    Verbose = options.verbose
-
+    utils.Verbose = options.verbose
     common = []
     diff = []
     projects = []
@@ -67,16 +59,14 @@ def main(options, args):
         if os.path.exists(args[0]):
             getManifestInfo(projects, default, manifestFile=args[0])
         else:
-            utils.print_err("fatal : manifest file is not exist")
-            sys.exit(-1)
+            utils.print_err("fatal : manifest file is not exist", exit_code=-1)
     elif len(args) == 0:
-            projects, default = getManifestInfo(projects, default)
+            getManifestInfo(projects, default)
     else:
-        utils.print_err("fatal : argument's length is only 1")
-        sys.exit(-1)
+        utils.print_err("fatal : argument's length is only 1", exit_code=-1)
 
     for prj in projects:
-        if prj['name'].find('device/lge') != -1 or prj['name'].find('vendor/lge') != -1 or prj['name'].find('LG_apps') != -1:
+        if 'device/lge' in prj['name'] or 'vendor/lge' in prj['name'] or 'LG_apps' in prj['name']:
             utils.print_verbose("pass : " + prj['name'])
             continue
         if prj.has_key('revision'):
@@ -96,8 +86,10 @@ def main(options, args):
         else:
             common.append(prj)
 
-    if options.common and len(common) !=0 : print "\n".join(common)
-    elif options.diff and len(diff) != 0:   print "\n".join(diff)
+    if options.common and len(common) !=0 :
+        print "\n".join([ prj['name'] for prj in common ])
+    elif options.diff and len(diff) != 0:
+        print "\n".join([ prj['name'] for prj in diff ])
     else:
         utils.print_err("fatal: please choose -c or -d options", exit=-1)
 
